@@ -36,19 +36,11 @@
  ********************************************************************************/
 
 require_once('Tidbit/Data/KBContents.php');
-require_once('Tidbit/Tidbit/Generator/Insert/Object.php');
 require_once('Tidbit/Tidbit/Generator/Abstract.php');
 require_once('Tidbit/Tidbit/Generator/Exception.php');
 
 class Tidbit_Generator_KBContents extends Tidbit_Generator_Abstract
 {
-    /**
-     * Hash of insert objects with table name as key
-     *
-     * @var array
-     */
-    private $insertObjects = array();
-
     /**
      * @var int
      */
@@ -58,6 +50,13 @@ class Tidbit_Generator_KBContents extends Tidbit_Generator_Abstract
      * @var int
      */
     private $kbNumberOfArticlesWithRevision = 0;
+
+    /**
+     * Stack of storage drivers by tables
+     *
+     * @var array
+     */
+    private $storageDrivers = array();
 
     /**
      * @var array
@@ -93,8 +92,9 @@ class Tidbit_Generator_KBContents extends Tidbit_Generator_Abstract
      * Constructor.
      *
      * @param DBManager $db
+     * @param Tidbit_StorageDriver_Factory $storageFactory
      */
-    public function __construct(DBManager $db)
+    public function __construct(DBManager $db, Tidbit_StorageDriver_Factory $storageFactory)
     {
         global $kbNumberOfArticlesWithNotes;
         if ($kbNumberOfArticlesWithNotes) {
@@ -106,7 +106,7 @@ class Tidbit_Generator_KBContents extends Tidbit_Generator_Abstract
             $this->kbNumberOfArticlesWithRevision = $kbNumberOfArticlesWithRevision;
         }
 
-        parent::__construct($db);
+        parent::__construct($db, $storageFactory);
     }
 
     /**
@@ -121,14 +121,6 @@ class Tidbit_Generator_KBContents extends Tidbit_Generator_Abstract
 
         for ($i = 0; $i < $number; $i++) {
             $this->createArticleInserts($i);
-        }
-
-        if (!empty($this->insertObjects)) {
-            foreach ($this->insertObjects as $object) {
-                /** @var Tidbit_Generator_Insert_Object $object */
-                processQueries($object->getHead(), $object->getValues());
-                $this->insertCounter += count($object->getValues());
-            }
         }
 
         global $kbLanguage;
@@ -198,7 +190,7 @@ class Tidbit_Generator_KBContents extends Tidbit_Generator_Abstract
             $noteTool->installData['parent_id'] = $contentTool->installData['id'];
             $noteTool->installData['team_id'] = $contentTool->installData['team_id'];
             $noteTool->installData['team_set_id'] = $contentTool->installData['team_set_id'];
-            $this->addInsertData($noteTool, 'notes2');
+            $this->addInsertData($noteTool);
             $this->numberOfArticlesWithNotes--;
         }
 
@@ -234,20 +226,24 @@ class Tidbit_Generator_KBContents extends Tidbit_Generator_Abstract
      * Create/update insert object.
      *
      * @param DataTool $dataTool
-     * @param string $storeKey
      */
-    private function addInsertData($dataTool, $storeKey = '')
+    private function addInsertData($dataTool)
     {
-        $storeKey = empty($storeKey) ? $dataTool->table_name : $storeKey;
-        $insertBody = $dataTool->createInsertBody();
-        if (empty($this->insertObjects[$storeKey])) {
-            $this->insertObjects[$storeKey] = new Tidbit_Generator_Insert_Object(
-                $dataTool->createInsertHead($dataTool->table_name),
-                array($insertBody)
-            );
-        } else {
-            $this->insertObjects[$storeKey]->addValues($insertBody);
+        $insertObject = new Tidbit_InsertObject($dataTool->table_name, $dataTool->installData);
+        $this->getStorageForTable($dataTool->table_name)->saveByChunk($insertObject);
+        $this->insertCounter++;
+    }
+
+    /**
+     * @param string $tableName
+     * @return Tidbit_StorageDriver_Storage_Abstract
+     */
+    private function getStorageForTable($tableName)
+    {
+        if (empty($this->storageDrivers[$tableName])) {
+            $this->storageDrivers[$tableName] = $this->storageFactory->getDriver();
         }
+        return $this->storageDrivers[$tableName];
     }
 
     /**

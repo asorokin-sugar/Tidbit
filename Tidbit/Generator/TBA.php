@@ -41,23 +41,51 @@ class Tidbit_Generator_TBA
     /**
      * @var DBManager
      */
-    protected $db;
+    private $db;
 
     /**
      * Counter of inserting objects.
      *
      * @var int
      */
-    protected $insertCounter = 0;
+    private $insertCounter = 0;
+
+    /**
+     * @var array
+     */
+    private $aclRoleIds = array();
+
+    /**
+     * @var Tidbit_StorageDriver_Storage_Abstract
+     */
+    private $storageAclFields;
+
+    /**
+     * @var Tidbit_StorageDriver_Storage_Abstract
+     */
+    private $storageAclRolesActions;
+
+    /**
+     * Using storage in db or not
+     *
+     * @var
+     */
+    private $storageTypeDb = true;
 
     /**
      * Constructor.
      *
      * @param DBManager $db
+     * @param Tidbit_StorageDriver_Factory $factory
+     * @param array $aclRoleIds
      */
-    public function __construct(DBManager $db)
+    public function __construct(DBManager $db, Tidbit_StorageDriver_Factory $factory, array $aclRoleIds)
     {
         $this->db = $db;
+        $this->aclRoleIds = $aclRoleIds;
+        $this->storageAclFields = $factory->getDriver();
+        $this->storageAclRolesActions = $factory->getDriver();
+        $this->storageTypeDb = $factory->getStorageType() != Tidbit_StorageDriver_Factory::OUTPUT_TYPE_CSV;
     }
 
     /**
@@ -77,26 +105,16 @@ class Tidbit_Generator_TBA
      */
     function generate($roleActions, $tbaRestrictionLevel, $tbaFieldAccess)
     {
-        // Cache ACLAction IDs
-        $queryACL = "SELECT id, category, name FROM acl_actions where category in ('"
-            . implode("','", array_values($roleActions)) . "')";
-        $resultACL = $this->db->query($queryACL);
+        $actionsIds = $this->getActionIds($roleActions);
+        $this->loadAclRoleIds();
 
-        $actionsIds = array();
+        $dateModified = $this->db->convert("'" . $GLOBALS['timedate']->nowDb() . "'", 'datetime');
 
-        // $actionsIds will contain keys like %category%_%name%
-        while ($row = $this->db->fetchByAssoc($resultACL)) {
-            $actionsIds[$row['category'] . '_' . $row['name']] = $row['id'];
-        }
-
-        $result = $this->db->query("SELECT id FROM acl_roles WHERE id LIKE 'seed-ACLRoles%'");
-        $date_modified = $this->db->convert("'" . $GLOBALS['timedate']->nowDb() . "'", 'datetime');
-
-        while ($row = $this->db->fetchByAssoc($result)) {
+        foreach ($this->aclRoleIds as $roleId) {
             foreach ($roleActions as $moduleName) {
-                $this->generateACLRoleActions($moduleName, $row['id'], $actionsIds, $date_modified, $tbaRestrictionLevel);
+                $this->generateACLRoleActions($moduleName, $roleId, $actionsIds, $dateModified, $tbaRestrictionLevel);
                 if ($tbaRestrictionLevel[$_SESSION['tba_level']]['fields']) {
-                    $this->generateACLFields($moduleName, $row['id'], $date_modified, $tbaFieldAccess, $tbaRestrictionLevel);
+                    $this->generateACLFields($moduleName, $roleId, $dateModified, $tbaFieldAccess, $tbaRestrictionLevel);
                 }
             }
         }
@@ -108,25 +126,26 @@ class Tidbit_Generator_TBA
      * @param $moduleName
      * @param $id
      * @param $actionsIds
-     * @param $date_modified
+     * @param $dateModified
      * @param $tbaRestrictionLevel
      */
-    private function generateACLRoleActions($moduleName, $id, $actionsIds, $date_modified, $tbaRestrictionLevel) {
+    private function generateACLRoleActions($moduleName, $id, $actionsIds, $dateModified, $tbaRestrictionLevel) {
         foreach ($tbaRestrictionLevel[$_SESSION['tba_level']]['modules'] as $action => $access_override) {
-            $actionId = isset($actionsIds[$moduleName . '_' . $action])
-                ? $actionsIds[$moduleName . '_' . $action]
-                : null;
-            if (!empty($actionId)) {
-                $relationship_data = array(
-                    'role_id' => $id,
-                    'action_id' => $actionId,
-                    'access_override' => $access_override
-                );
-                $query = "INSERT INTO acl_roles_actions (id, " . implode(',', array_keys($relationship_data))
-                    . ", date_modified) VALUES ('" . create_guid() . "', " . "'"
-                    . implode("', '", $relationship_data) . "', " . $date_modified . ")";
-                loggedQuery($query);
+            if (!isset($actionsIds[$moduleName . '_' . $action])) {
+                continue;
             }
+
+            $relationshipData = array(
+                'id' => "'" . create_guid() . "'",
+                'role_id' => "'" . $id . "'",
+                'action_id' => "'" . $actionsIds[$moduleName . '_' . $action] . "'",
+                'access_override' => $access_override,
+                'date_modified' => $dateModified,
+            );
+
+            $insertObject = new Tidbit_InsertObject('acl_roles_actions', $relationshipData);
+            $this->storageAclRolesActions->saveByChunk($insertObject);
+            $this->insertCounter++;
         }
     }
 
@@ -135,34 +154,71 @@ class Tidbit_Generator_TBA
      *
      * @param $moduleName
      * @param $id
-     * @param $date_modified
+     * @param $dateModified
      * @param $tbaFieldAccess
      * @param $tbaRestrictionLevel
      */
-    private function generateACLFields($moduleName, $id, $date_modified, $tbaFieldAccess, $tbaRestrictionLevel) {
+    private function generateACLFields($moduleName, $id, $dateModified, $tbaFieldAccess, $tbaRestrictionLevel) {
         $beanACLFields = BeanFactory::getBean('ACLFields');
         $roleFields = $beanACLFields->getFields($moduleName, '', $id);
         foreach ($roleFields as $fieldName => $fieldValues) {
-            $date = trim($date_modified, "'");
-            $insert_data = array(
-                'id' => md5($moduleName . $id . $fieldName),
-                'date_entered' => $date,
-                'date_modified' => $date,
-                'name' => $fieldName,
-                'category' => $moduleName,
-                'aclaccess' => $tbaFieldAccess,
-                'role_id' => $id
-            );
-            $query = "INSERT INTO acl_fields (" . implode(',', array_keys($insert_data))
-                . ") VALUES (" . "'" . implode("', '", $insert_data) . "')";
-
-            if ($tbaRestrictionLevel[$_SESSION['tba_level']]['fields'] === 'required_only') {
-                if ($fieldValues['required']) {
-                    loggedQuery($query);
-                }
-            } else {
-                loggedQuery($query);
+            if ($tbaRestrictionLevel[$_SESSION['tba_level']]['fields'] === 'required_only'
+                && !$fieldValues['required']
+            ) {
+                continue;
             }
+            //$date = trim($dateModified, "'");
+            $insertData = array(
+                'id' => "'" . md5($moduleName . $id . $fieldName) . "'",
+                'date_entered' => $dateModified,
+                'date_modified' => $dateModified,
+                'name' => "'" .$fieldName .  "'",
+                'category' => "'" . $moduleName .  "'",
+                'aclaccess' => $tbaFieldAccess,
+                'role_id' => "'" . $id .  "'",
+            );
+
+            $insertObject = new Tidbit_InsertObject('acl_fields', $insertData);
+            $this->storageAclFields->saveByChunk($insertObject);
+            $this->insertCounter++;
+        }
+    }
+
+    /**
+     * Loads and return action ids
+     *
+     * @param $roleActions
+     * @return array
+     */
+    private function getActionIds($roleActions)
+    {
+        // Cache ACLAction IDs
+        $queryACL = "SELECT id, category, name FROM acl_actions where category in ('"
+            . implode("','", array_values($roleActions)) . "')";
+        $resultACL = $this->db->query($queryACL);
+
+        $actionsIds = array();
+
+        // $actionsIds will contain keys like %category%_%name%
+        while ($row = $this->db->fetchByAssoc($resultACL)) {
+            $actionsIds[$row['category'] . '_' . $row['name']] = $row['id'];
+        }
+        return $actionsIds;
+    }
+
+    /**
+     * Load AclRole ids from db
+     */
+    private function loadAclRoleIds()
+    {
+        // if storage isn't db we use just setted in constructor ids
+        if (!$this->storageTypeDb) {
+            return;
+        }
+        $this->aclRoleIds = array();
+        $result = $this->db->query("SELECT id FROM acl_roles WHERE id LIKE 'seed-ACLRoles%'");
+        while ($row = $this->db->fetchByAssoc($result)) {
+            $this->aclRoleIds[] = $row['id'];
         }
     }
 }

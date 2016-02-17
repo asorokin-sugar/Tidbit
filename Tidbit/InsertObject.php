@@ -2,7 +2,7 @@
 
 /*********************************************************************************
  * Tidbit is a data generation tool for the SugarCRM application developed by
- * SugarCRM, Inc. Copyright (C) 2004-2016 SugarCRM Inc.
+ * SugarCRM, Inc. Copyright (C) 2004-2010 SugarCRM Inc.
  *
  * This program is free software; you can redistribute it and/or modify it under
  * the terms of the GNU Affero General Public License version 3 as published by the
@@ -35,36 +35,30 @@
  * "Powered by SugarCRM".
  ********************************************************************************/
 
-class Tidbit_Generator_Activity_Db_Oracle extends Tidbit_Generator_Activity_Db_Common
+/**
+ * Class-container of generated data to adopt it for Storage Drivers
+ */
+class Tidbit_InsertObject
 {
     /**
-     * {@inheritdoc}
+     * @var string
      */
-    protected $fetchQueryPatterns = array(
-        'default' => "SELECT id%s FROM %s ORDER BY date_modified DESC OFFSET %d ROWS FETCH NEXT %d ROWS ONLY",
-    );
+    public $tableName = '';
 
     /**
-     * {@inheritdoc}
+     * @var array
      */
-    protected function insertDataSet(array $dataSet, $tableName)
+    public $installData = [];
+
+    /**
+     * Constructor
+     *
+     * @param string $tableName
+     * @param array $installData
+     */
+    public function __construct($tableName, $installData)
     {
-        if (empty($dataSet)) {
-            return false;
-        }
-
-        $columns = "(" . implode(", ", array_keys($dataSet[0])) . ")";
-
-        $sql = 'INSERT ALL';
-        foreach ($dataSet as $row) {
-            $sql .= ' INTO ' . $tableName . $columns . ' VALUES ' . "(" . implode(", ", $row) . ")";
-        }
-        // select-command below needed because syntax of insert-all command suggests what we take data
-        // from db object: 'insert all ... select from ...', but in this case we generating
-        // the data in code, so in select section of query we substitute dummy-table 'dual'
-        // see http://docs.oracle.com/cd/B19306_01/server.102/b14200/statements_9014.htm#i2111652
-        $sql .= ' SELECT * FROM dual';
-
-        return $this->query($sql) && $this->db->query('COMMIT');
+        $this->tableName = $tableName;
+        $this->installData = $installData;
     }
 }

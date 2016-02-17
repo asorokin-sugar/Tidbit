@@ -2,7 +2,7 @@
 
 /*********************************************************************************
  * Tidbit is a data generation tool for the SugarCRM application developed by
- * SugarCRM, Inc. Copyright (C) 2004-2016 SugarCRM Inc.
+ * SugarCRM, Inc. Copyright (C) 2004-2010 SugarCRM Inc.
  *
  * This program is free software; you can redistribute it and/or modify it under
  * the terms of the GNU Affero General Public License version 3 as published by the
@@ -35,91 +35,99 @@
  * "Powered by SugarCRM".
  ********************************************************************************/
 
-abstract class Tidbit_Generator_Abstract
-{
-    /**
-     * @var DBManager
-     */
-    protected $db;
+require_once('Tidbit/Tidbit/Exception.php');
+
+class Tidbit_StorageDriver_Factory {
+
+    const OUTPUT_TYPE_MYSQL     = 'mysql';
+    const OUTPUT_TYPE_ORACLE    = 'oracle';
+    const OUTPUT_TYPE_IBM       = 'ibm';
+    const OUTPUT_TYPE_CSV       = 'csv';
 
     /**
-     * @var Tidbit_StorageDriver_Factory
-     */
-    protected $storageFactory;
-
-    /**
-     * Counter of inserting objects.
+     * List of storage types
      *
-     * @var int
+     * @var array
      */
-    protected $insertCounter = 0;
+    private $availableTypes = [
+        self::OUTPUT_TYPE_CSV,
+        self::OUTPUT_TYPE_IBM,
+        self::OUTPUT_TYPE_MYSQL,
+        self::OUTPUT_TYPE_ORACLE,
+    ];
 
     /**
-     * Constructor.
-     *
-     * @param DBManager $db
-     * @param Tidbit_StorageDriver_Factory $storageFactory
+     * @var string
      */
-    public function __construct(DBManager $db, Tidbit_StorageDriver_Factory $storageFactory)
+    private $storageType;
+
+    /**
+     * @var string
+     */
+    private $storageResource;
+
+    /**
+     * @var string
+     */
+    private $logQueryPath;
+
+    /**
+     * @var string
+     */
+    private $storeChunkSize;
+
+    /**
+     * @var string
+     */
+    private $driverClassName;
+
+    /**
+     * Prepare factory for working
+     *
+     * @param string $storageType
+     * @param mixed $storageResource
+     * @param string $logQueryPath
+     * @param int   $storeChunkSize
+     *
+     * @throws Tidbit_Exception
+     */
+    public function __construct($storageType, $storageResource, $logQueryPath = '', $storeChunkSize = 0)
     {
-        $this->db = $db;
-        $this->storageFactory = $storageFactory;
+        if (!in_array($storageType, $this->availableTypes)) {
+            throw new Tidbit_Exception('Unsupported storage type');
+        }
+        $this->storageType = $storageType;
+        $this->storageResource = $storageResource;
+        $this->logQueryPath = $logQueryPath;
+        $this->storeChunkSize = $storeChunkSize;
+        $this->plugDriverClass();
     }
 
     /**
-     * Data generator.
-     *
-     * @param int $number
+     * @return string
      */
-    abstract public function generate($number);
-
-    /**
-     * Remove generated data from DB.
-     */
-    abstract public function clearDB();
-
-    /**
-     * Remove all data from the tables of DB affected by generator.
-     */
-    abstract public function obliterateDB();
-
-    /**
-     * @return int
-     */
-    public function getInsertCounter()
+    public function getStorageType()
     {
-        return $this->insertCounter;
+        return $this->storageType;
     }
 
     /**
-     * Generate DataTool object with data for model.
+     * Storage Driver Creator
      *
-     * @param string $modelName
-     * @param int $modelCounter
-     * @return DataTool
+     * @return Tidbit_StorageDriver_Storage_Abstract
      */
-    protected function getDataToolForModel($modelName, $modelCounter)
+    public function getDriver()
     {
-        $bean = BeanFactory::getBean($modelName);
-
-        $dataTool = new DataTool();
-        $dataTool->fields = $bean->field_defs;
-        $dataTool->table_name = $bean->table_name;
-        $dataTool->module = $modelName;
-        $dataTool->count = $modelCounter;
-        $dataTool->generateId();
-        $dataTool->generateData();
-
-        return $dataTool;
+        return new $this->driverClassName($this->storageResource, $this->logQueryPath, $this->storeChunkSize);
     }
 
     /**
-     * Log generator message.
-     *
-     * @param string $message
+     * rtfn
      */
-    protected function log($message)
+    private function plugDriverClass()
     {
-        echo $message . "\n";
+        $driverSuffixName = ucfirst($this->storageType);
+        require_once("Tidbit/Tidbit/StorageDriver/Storage/" . $driverSuffixName . '.php');
+        $this->driverClassName = 'Tidbit_StorageDriver_Storage_' . $driverSuffixName;
     }
 }

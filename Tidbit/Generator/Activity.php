@@ -35,7 +35,9 @@
  * "Powered by SugarCRM".
  ********************************************************************************/
 
-class Tidbit_Generator_Activity_Db_Common
+require_once('Tidbit/Tidbit/Generator/Activity/Entity.php');
+
+class Tidbit_Generator_Activity
 {
     public $userCount;
     public $activitiesPerModuleRecord;
@@ -57,6 +59,18 @@ class Tidbit_Generator_Activity_Db_Common
     protected $totalModulesRecords = 0;
 
     /**
+     * @var Tidbit_StorageDriver_Factory.
+     */
+    protected $storageFactory;
+
+    /**
+     * List of storage drivers for tables.
+     *
+     * @var array
+     */
+    protected $storageDrivers = array();
+
+    /**
      * Dynamic variable using to pass values to another iteration of createDataSet -> flushDataSet
      * @var array
      */
@@ -71,7 +85,6 @@ class Tidbit_Generator_Activity_Db_Common
     protected $fetchQueryPatterns = array(
         'default' => "SELECT id%s FROM %s ORDER BY date_modified DESC LIMIT %d, %d",
     );
-    protected $insertQueryPattern = "INSERT INTO %s (%s) VALUES %s";
     protected $fetchedData = array();
     protected $fullyLoadedModules = array();
     protected $currentUser;
@@ -94,6 +107,16 @@ class Tidbit_Generator_Activity_Db_Common
         'unlink' => 0,
         'post' => 0,
     );
+
+    /**
+     * Constructor
+     *
+     * @param Tidbit_StorageDriver_Factory $factory
+     */
+    public function __construct(Tidbit_StorageDriver_Factory $factory)
+    {
+        $this->storageFactory = $factory;
+    }
 
     public function init()
     {
@@ -208,29 +231,21 @@ class Tidbit_Generator_Activity_Db_Common
 
     public function flushDataSet($final = false)
     {
-        if (!empty($this->dataSet) && (($this->dataSetLength >= $this->insertionBufferSize) || $final)) {
-            // activities
-            $result = $this->insertDataSet($this->dataSet, $this->activityBean->table_name);
-            if ($result) {
-                // relationships
-                $result = $this->insertDataSet($this->dataSetRelationships, $this->relationshipsTable);
-
-                if ($result) {
-                    $this->insertedActivities += $this->dataSetLength;
-                    $this->progress = round(($this->currentOffsets['Users']['next'] / ($this->currentOffsets['Users']['total'] + 1)) * 100);
-
-                    $this->dataSet = $this->dataSetRelationships = array();
-                    $this->dataSetLength = 0;
-
-                    return true;
-                }
-            }
-            // incorrect query or db error is fatal error
-            return false;
-        } else {
-            // empty dataSet is not an error
-            return true;
+        if (empty($this->dataSet) || (($this->dataSetLength < $this->insertionBufferSize) && !$final)) {
+            return;
         }
+
+        // activities
+        $this->insertDataSet($this->dataSet, $this->activityBean->table_name);
+
+        // relationships
+        $this->insertDataSet($this->dataSetRelationships, $this->relationshipsTable);
+
+        $this->insertedActivities += $this->dataSetLength;
+        $this->progress = round(($this->currentOffsets['Users']['next'] / ($this->currentOffsets['Users']['total'] + 1)) * 100);
+
+        $this->dataSet = $this->dataSetRelationships = array();
+        $this->dataSetLength = 0;
     }
 
     /**
@@ -238,26 +253,29 @@ class Tidbit_Generator_Activity_Db_Common
      *
      * @param array $dataSet
      * @param string $tableName
-     * @return bool
      */
     protected function insertDataSet(array $dataSet, $tableName)
     {
-        if (!empty($dataSet)) {
-            $columns = array_keys($dataSet[0]);
-            $dataRows = array();
-            foreach ($dataSet as $row) {
-                $dataRows[] = "(" . implode(", ", $row) . ")";
-            }
-            $sql = sprintf(
-                $this->insertQueryPattern,
-                $tableName,
-                implode(', ', $columns),
-                implode(', ', $dataRows)
-            );
-            return $this->query($sql);
-        } else {
-            return false;
+        if (empty($dataSet)) {
+            return;
         }
+        foreach ($dataSet as $set) {
+            $insertObject = new Tidbit_InsertObject($tableName, $set);
+            $this->getStorageDriverForTable($tableName)->saveByChunk($insertObject);
+        }
+    }
+
+    /**
+     * Lazy loader of storage drivers
+     *
+     * @param string $tableName
+     */
+    protected function getStorageDriverForTable($tableName)
+    {
+        if (empty($this->storageDrivers[$tableName])) {
+            $this->storageDrivers[$tableName] = $this->storageFactory->getDriver();
+        }
+        return $this->storageDrivers[$tableName];
     }
 
     protected function initNextModuleName()

@@ -1,8 +1,7 @@
 <?php
-
 /*********************************************************************************
  * Tidbit is a data generation tool for the SugarCRM application developed by
- * SugarCRM, Inc. Copyright (C) 2004-2016 SugarCRM Inc.
+ * SugarCRM, Inc. Copyright (C) 2004-2010 SugarCRM Inc.
  *
  * This program is free software; you can redistribute it and/or modify it under
  * the terms of the GNU Affero General Public License version 3 as published by the
@@ -35,51 +34,44 @@
  * "Powered by SugarCRM".
  ********************************************************************************/
 
-class Tidbit_Generator_Insert_Object
-{
+require_once('Tidbit/Tidbit/StorageDriver/Storage/Abstract.php');
+
+class Tidbit_StorageDriver_Storage_Oracle extends Tidbit_StorageDriver_Storage_Abstract {
+
     /**
      * @var string
      */
-    private $head;
-
-
-    /**
-     * @var array
-     */
-    private $values = array();
-
+    const STORE_TYPE = Tidbit_StorageDriver_Factory::OUTPUT_TYPE_ORACLE;
 
     /**
-     * @return string
+     * {@inheritdoc}
+     *
+     * @param Tidbit_InsertObject $insertObject
      */
-    public function getHead()
+    protected function prepareToSave(Tidbit_InsertObject $insertObject)
     {
-        return $this->head;
+        $columns = " (" . implode(", ", array_keys($insertObject->installData)) . ")";
+        $this->values[] = ' INTO ' . $insertObject->tableName . $columns . ' VALUES '
+            . "(" . implode(", ", $insertObject->installData) . ")";
     }
 
     /**
-     * @return array
+     * {@inheritdoc}
+     *
      */
-    public function getValues()
+    protected function makeSave()
     {
-        return $this->values;
-    }
+        $this->head = 'INSERT ALL ';
 
-    /**
-     * @param string $values
-     */
-    public function addValues($values)
-    {
-        $this->values[] = $values;
-    }
+        if (!$this->values) {
+            throw new Tidbit_Exception("Oracle driver error: wrong data to insert");
+        }
 
-    /**
-     * @param string $head
-     * @param array $values
-     */
-    public function __construct($head, $values)
-    {
-        $this->head = $head;
-        $this->values = $values;
+        $sql = $this->head . implode(' ', $this->values);
+        $sql .= ' SELECT * FROM dual';
+        $this->logQuery($sql);
+        $this->clear();
+        $this->storageResource->query($sql, true, "INSERT QUERY FAILED");
+        $this->commitQuery();
     }
 }

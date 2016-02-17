@@ -2,7 +2,7 @@
 
 /*********************************************************************************
  * Tidbit is a data generation tool for the SugarCRM application developed by
- * SugarCRM, Inc. Copyright (C) 2004-2016 SugarCRM Inc.
+ * SugarCRM, Inc. Copyright (C) 2004-2010 SugarCRM Inc.
  *
  * This program is free software; you can redistribute it and/or modify it under
  * the terms of the GNU Affero General Public License version 3 as published by the
@@ -35,23 +35,58 @@
  * "Powered by SugarCRM".
  ********************************************************************************/
 
-require_once('Entity.php');
-require_once('Db/Common.php');
-require_once('Db/Oracle.php');
-
-class Tidbit_Generator_Activity_Factory
+/**
+ * Class for convert tables from db to csv
+ */
+class Tidbit_CsvConverter
 {
     /**
-     * Create and return activity generator according needed db type
-     *
-     * @param string $dbType
-     * @return Tidbit_Generator_Activity_Db_Common|Tidbit_Generator_Activity_Db_Oracle
+     * @var DBManager
      */
-    public static function getGeneratorForDb($dbType)
+    protected $db;
+
+    /**
+     * @var Tidbit_StorageDriver_Factory
+     */
+    protected $csvFactory;
+
+    /**
+     * @param DBManager $db
+     * @param string $storePath
+     */
+    public function __construct(DBManager $db, $storePath)
     {
-        if ($dbType == 'oci8') {
-            return new Tidbit_Generator_Activity_Db_Oracle();
-        }
-        return new Tidbit_Generator_Activity_Db_Common();
+        $this->db = $db;
+
+        $this->csvFactory = new Tidbit_StorageDriver_Factory(
+            Tidbit_StorageDriver_Factory::OUTPUT_TYPE_CSV,
+            $storePath
+        );
     }
+
+    /**
+     * Gets data from table fields and place it into csv file
+     *
+     * @param string $tableName
+     * @param array $fieldsArr
+     */
+    public function convert($tableName, array $fieldsArr = array())
+    {
+        $storage = $this->csvFactory->getDriver();
+
+        $fields = empty($fieldsArr) ? '*' : join(',', $fieldsArr);
+        $sql = "SELECT " . $fields . " FROM " . $tableName;
+        $result = $this->db->query($sql);
+
+        while ($row = $this->db->fetchByAssoc($result)) {
+            foreach ($row as $k=>$v) {
+                $row[$k] = "'" . $v . "'";
+            }
+            $insertObject = new Tidbit_InsertObject($tableName, $row);
+            $storage->saveByChunk($insertObject);
+        }
+
+    }
+
+
 }
